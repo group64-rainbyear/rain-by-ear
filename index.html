@@ -1,0 +1,141 @@
+ <!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rain by Ear</title>
+<style>
+  body { font-family: sans-serif; text-align: center; padding: 20px; background: #f4f4f4; }
+  #status { font-size: 28px; font-weight: bold; padding: 30px 10px; margin: 20px 0;
+            border-radius: 12px; color: white; background: gray; }
+  button { font-size: 18px; padding: 12px 20px; margin: 6px; border-radius: 8px; }
+  #numbers { font-size: 16px; color: #333; }
+</style>
+</head>
+<body>
+
+<h1>Rain by Ear</h1>
+<button id="startBtn">Start listening</button>
+<button id="calBtn">Calibrate (quiet)</button>
+<div id="status">Press Start</div>
+<div id="numbers"></div>
+
+<script>
+// ----- dividing lines, from our rain recordings -----
+let RAIN_LINE = -45;      // louder than this = raining (calibration changes it)
+const HEAVY_LINE = 2.75;  // spread below this = heavy rain
+const LIGHT_LINE = 4.35;  // spread above this = light rain
+const WINDOW = 300;       // judge the last 100 pieces = 10 seconds
+
+// ----- what each rain level shows on screen -----
+const levels = {
+  "no rain":  { text: "OK - no rain",                       color: "#2e7d32" },
+  "light":    { text: "Light rain - no action needed",      color: "#1976d2" },
+  "moderate": { text: "Moderate rain - keep watching",      color: "#ef6c00" },
+  "heavy":    { text: "WARNING: heavy rain - flood risk!",  color: "#c62828" }
+};
+
+let analyser, buffer;
+let pieces = [];          // loudness of each 0.1 s piece, in dB
+let calibrating = false;
+let calPieces = [];
+
+const statusBox = document.getElementById("status");
+const numbersBox = document.getElementById("numbers");
+
+// loudness of what the microphone hears right now
+function pieceDb() {
+  analyser.getFloatTimeDomainData(buffer);
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+  const rms = Math.sqrt(sum / buffer.length);
+  return 20 * Math.log10(rms + 1e-12);
+}
+
+// overall loudness of a list of pieces
+function loudnessOf(list) {
+  let power = 0;
+  for (const d of list) power += Math.pow(10, d / 10);
+  return 10 * Math.log10(power / list.length);
+}
+
+// spread: how much the pieces vary (small = steady roar)
+function spreadOf(list) {
+  const mean = list.reduce((a, b) => a + b, 0) / list.length;
+  const varSum = list.reduce((a, b) => a + (b - mean) * (b - mean), 0);
+  return Math.sqrt(varSum / list.length);
+}
+
+// the same two-step rule as rain_check.py
+function classify(loud, spread) {
+  if (loud < RAIN_LINE) return "no rain";
+  if (spread < HEAVY_LINE) return "heavy";
+  if (spread > LIGHT_LINE) return "light";
+  return "moderate";
+}
+
+// runs every 0.1 seconds
+function tick() {
+  const d = pieceDb();
+
+  // calibration: listen to 5 seconds of quiet, then set the rain line
+  if (calibrating) {
+    calPieces.push(d);
+    statusBox.textContent = "Calibrating...stay quiet";
+    if (calPieces.length >= 50) {
+      const quiet = loudnessOf(calPieces);
+      RAIN_LINE = quiet + 15;      // rain must be 15 dB louder than quiet
+      calibrating = false;
+      pieces = [];
+      statusBox.textContent = "Calibrated - listening";
+    }
+    return;
+  }
+
+  // keep only the last 10 seconds of pieces
+  pieces.push(d);
+  if (pieces.length > WINDOW) pieces.shift();
+  if (pieces.length < 30) {
+    statusBox.textContent = "Listening...";
+    return;
+  }
+
+  const loud = loudnessOf(pieces);
+  const spread = spreadOf(pieces);
+  const level = levels[classify(loud, spread)];
+
+  statusBox.textContent = level.text;
+  statusBox.style.background = level.color;
+  numbersBox.textContent = "Loudness " + loud.toFixed(1) + " dB  |  Spread " +
+    spread.toFixed(1) + " dB  |  Rain line " + RAIN_LINE.toFixed(1) + " dB";
+}
+
+// start button: ask for the microphone and begin listening
+document.getElementById("startBtn").onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 4096;
+    source.connect(analyser);
+    buffer = new Float32Array(analyser.fftSize);
+    setInterval(tick, 100);
+    statusBox.textContent = "Listening..";
+  } catch (err) {
+    statusBox.textContent = "Microphone not allowed: " + err.message;
+  }
+};
+
+// calibrate button: learn what "quiet" sounds like here
+document.getElementById("calBtn").onclick = () => {
+  if (!analyser) { alert("Press Start listening first"); return; }
+  calibrating = true;
+  calPieces = [];
+};
+</script>
+
+</body>
+</html>
