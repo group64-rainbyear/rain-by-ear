@@ -170,7 +170,13 @@
         calPieces.push(m);
         statusBox.textContent = "Calibrating... stay quiet";
         if (calPieces.length >= 50) {
-          const quiet = summary(calPieces).loud;
+          const c = summary(calPieces);
+          if (c.score >= PHONES[phoneBox.value].score) {
+            calibrating = false;
+            addLog("Sounds like rain - calibration cancelled");
+            return;
+          }
+          const quiet = c.loud;
           offset = quiet - PHONES[phoneBox.value].quiet;
           calibrating = false;
           pieces = [];
